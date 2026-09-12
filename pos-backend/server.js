@@ -6,7 +6,7 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Database Connection String එක Direct සහ Env Variable දෙකෙන්ම check කිරීම
+
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb+srv://sashini:sashini123@cluster0.xxx.mongodb.net/pos_system?retryWrites=true&w=majority";
 
 let isConnected = false;
@@ -24,21 +24,21 @@ const connectDB = async () => {
   }
 };
 
-// Global Middleware එක හරහා හැම request එකකටම DB connect කරවීම
+
 app.use(async (req, res, next) => {
   await connectDB();
   next();
 });
 
-// Root Route Test එක
+
 app.get('/', (req, res) => {
   res.send('POS Backend API is running successfully!');
 });
 
-// Sample Products API Endpoint
+
 app.get('/api/products', async (req, res) => {
   try {
-    // Database එකෙන් Products ගන්නා Route එක
+    
     const products = await mongoose.connection.db.collection('products').find({}).toArray();
     res.json(products);
   } catch (err) {

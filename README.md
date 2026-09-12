@@ -1,5 +1,10 @@
 # POS Order & Inventory Management System
 
+Live Demo (Frontend): [https://pos-order-inventory-system1-8s4jtkqqv-sashini.vercel.app](https://pos-order-inventory-system1-8s4jtkqqv-sashini.vercel.app)
+
+Backend API URL: [https://pos-backend-mc643n9oc-sashini.vercel.app](https://pos-backend-mc643n9oc-sashini.vercel.app)
+
+
 A full-stack Point of Sale (POS) and Inventory Management System built with **Node.js (Express), MongoDB (Mongoose), and React (Vite)**. Built for the Techloom.ai technical assessment, this application features concurrency-safe stock handling, idempotent checkout logic, automatic order expiration (TTL), and an audit log.
 
 ---
