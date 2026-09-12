@@ -3,12 +3,19 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 
 const app = express();
+const cors = require('cors');
 
+
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 // Middleware Setup
 app.use(cors());
 app.use(express.json());
 
-// MongoDB Connection String (Environment Variable or Fallback)
+
 const MONGODB_URI = process.env.MONGODB_URI || "mongodb+srv://sashini:sashini123@cluster0.xxx.mongodb.net/pos_system?retryWrites=true&w=majority";
 
 let isConnected = false;
@@ -71,7 +78,7 @@ app.post('/api/products', async (req, res) => {
   }
 });
 
-// 3. GET ALL ORDERS (Optional - for history log)
+
 app.get('/api/orders', async (req, res) => {
   try {
     const orders = await mongoose.connection.db.collection('orders').find({}).toArray();
