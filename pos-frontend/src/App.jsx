@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
-const API_URL = "https://pos-backend-mc643n9oc-sashini.vercel.app/api/products";
+const API_URL = "https://pos-backend-mc643n9oc-sashini.vercel.app";
 
 export default function App() {
   const [products, setProducts] = useState([]);
