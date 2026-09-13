@@ -128,7 +128,11 @@ function App() {
     });
   };
 
-  // Fixed: Cart එකේ තියෙන හැම item එකක් සඳහාම Backend API එකට වෙන වෙනම Reserve Request යවයි
+  // Cart එකෙන් Item එකක් Remove කිරීමට Function එක
+  const removeFromCart = (productId) => {
+    setCart((prevCart) => prevCart.filter((item) => item.productId !== productId));
+  };
+
   const handleCreateOrder = async () => {
     if (cart.length === 0) return;
 
@@ -270,9 +274,18 @@ function App() {
           {cart.length === 0 ? <p className="empty-cart">Cart is empty</p> : (
             <div>
               {cart.map((item) => (
-                <div key={item.productId} className="cart-item">
-                  <span>{item.name} × {item.quantity}</span>
-                  <span>LKR {item.price * item.quantity}</span>
+                <div key={item.productId} className="cart-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                  <div>
+                    <span>{item.name} × {item.quantity}</span>
+                    <br />
+                    <small>LKR {item.price * item.quantity}</small>
+                  </div>
+                  <button 
+                    onClick={() => removeFromCart(item.productId)}
+                    style={{ background: '#dc3545', color: '#fff', border: 'none', borderRadius: '4px', padding: '4px 8px', cursor: 'pointer' }}
+                  >
+                    Delete
+                  </button>
                 </div>
               ))}
               <button className="btn btn-primary" style={{ width: '100%', marginTop: '10px' }} onClick={handleCreateOrder}>
