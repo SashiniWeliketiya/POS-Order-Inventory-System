@@ -7,26 +7,23 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-
+// Global connection promise for Vercel Serverless Function caching
 let cachedPromise = null;
 
 const connectDB = async () => {
-  
   if (mongoose.connection.readyState === 1) {
     return mongoose.connection;
   }
 
-  
   const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
   if (!MONGO_URI) {
     throw new Error("MONGO_URI is missing in Vercel Environment Variables!");
   }
 
-  
   if (!cachedPromise) {
     const opts = {
-      bufferCommands: true, 
-      serverSelectionTimeoutMS: 5000, 
+      bufferCommands: true,
+      serverSelectionTimeoutMS: 5000,
     };
     cachedPromise = mongoose.connect(MONGO_URI, opts).then((m) => m);
   }
@@ -34,14 +31,14 @@ const connectDB = async () => {
   try {
     await cachedPromise;
   } catch (e) {
-    cachedPromise = null; 
+    cachedPromise = null;
     throw e;
   }
 
   return mongoose.connection;
 };
 
-// Middleware
+// Middleware: Ensure Database Connection Before Processing Requests
 app.use(async (req, res, next) => {
   try {
     await connectDB();
@@ -70,7 +67,7 @@ const orderSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
   quantity: { type: Number, required: true },
   status: { type: String, enum: ['RESERVED', 'COMPLETED', 'EXPIRED'], default: 'RESERVED' },
-  createdAt: { type: Date, default: Date.now, expires: 300 } // Auto-expire after 5 minutes
+  createdAt: { type: Date, default: Date.now, expires: 300 }
 });
 const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
 
@@ -86,14 +83,26 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// 2. Add New Product
+// 2. Add New Product (Includes NaN & Data Validation)
 app.post('/api/products', async (req, res) => {
   try {
     const { name, price, stock } = req.body;
-    if (!name || price === undefined || stock === undefined) {
-      return res.status(400).json({ error: 'All fields (name, price, stock) are required' });
+
+    const parsedPrice = Number(price);
+    const parsedStock = Number(stock);
+
+    if (!name || isNaN(parsedPrice) || isNaN(parsedStock)) {
+      return res.status(400).json({ 
+        error: 'Invalid input data: Please provide a valid Name, Price, and Stock quantity.' 
+      });
     }
-    const product = new Product({ name, price: Number(price), stock: Number(stock) });
+
+    const product = new Product({ 
+      name, 
+      price: parsedPrice, 
+      stock: parsedStock 
+    });
+
     await product.save();
     res.status(201).json(product);
   } catch (err) {
@@ -106,6 +115,10 @@ app.post('/api/orders/reserve', async (req, res) => {
   try {
     const { productId, quantity } = req.body;
     const qty = Number(quantity);
+
+    if (isNaN(qty) || qty <= 0) {
+      return res.status(400).json({ error: 'Please provide a valid quantity to reserve' });
+    }
 
     const updatedProduct = await Product.findOneAndUpdate(
       { _id: productId, stock: { $gte: qty } },
@@ -126,7 +139,7 @@ app.post('/api/orders/reserve', async (req, res) => {
   }
 });
 
-// 4. Complete Order (Payment Gateway Simulation)
+// 4. Complete Order (Payment Simulation)
 app.post('/api/orders/complete', async (req, res) => {
   try {
     const { orderId } = req.body;
