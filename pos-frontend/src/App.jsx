@@ -4,7 +4,7 @@ import './App.css';
 // Dynamic API Base URL Configuration
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   ? 'http://localhost:5000'
-  : 'https://pos-backend-api-delta.vercel.app'; // Trailing slash ඉවත් කර ඇත
+  : 'https://pos-backend-api-delta.vercel.app';
 
 // Live Countdown Timer Component
 function CountdownTimer({ expiresAt }) {
@@ -43,7 +43,7 @@ function App() {
   const [products, setProducts] = useState([]);
   const [cart, setCart] = useState([]);
   const [orders, setOrders] = useState([]);
-  const [activeOrder, setActiveOrder] = useState(null);
+  const [activeOrders, setActiveOrders] = useState([]);
   const [newProduct, setNewProduct] = useState({ name: '', price: '', stock: '' });
 
   const fetchProducts = async () => {
@@ -128,45 +128,57 @@ function App() {
     });
   };
 
+  // Fixed: Cart එකේ තියෙන හැම item එකක් සඳහාම Backend API එකට වෙන වෙනම Reserve Request යවයි
   const handleCreateOrder = async () => {
     if (cart.length === 0) return;
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/orders/reserve`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ items: cart }),
-      });
 
-      const data = await res.json();
-      if (res.ok) {
-        setActiveOrder(data.order);
+    try {
+      const reservedOrders = [];
+
+      for (const item of cart) {
+        const res = await fetch(`${API_BASE_URL}/api/orders/reserve`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ 
+            productId: item.productId, 
+            quantity: Number(item.quantity) 
+          }),
+        });
+
+        const data = await res.json();
+
+        if (res.ok) {
+          reservedOrders.push(data.order);
+        } else {
+          alert(`Failed for ${item.name}: ${data.error}`);
+        }
+      }
+
+      if (reservedOrders.length > 0) {
+        setActiveOrders(reservedOrders);
         setCart([]);
         fetchProducts();
         fetchOrders();
-      } else {
-        alert(data.error);
       }
     } catch (err) {
       alert('Failed to reserve stock.');
     }
   };
 
-  const handleMockPayment = async (outcome) => {
-    if (!activeOrder) return;
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/orders/pay`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          orderId: activeOrder._id,
-          outcome,
-          idempotencyKey: `PAY-${activeOrder._id}-${Date.now()}`
-        }),
-      });
+  const handleMockPayment = async () => {
+    if (activeOrders.length === 0) return;
 
-      const data = await res.json();
-      alert(data.message);
-      setActiveOrder(null);
+    try {
+      for (const order of activeOrders) {
+        await fetch(`${API_BASE_URL}/api/orders/complete`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId: order._id }),
+        });
+      }
+
+      alert('Payment successful, orders completed!');
+      setActiveOrders([]);
       fetchProducts();
       fetchOrders();
     } catch (err) {
@@ -182,7 +194,7 @@ function App() {
         body: JSON.stringify({ orderId }),
       });
       const data = await res.json();
-      alert(data.message);
+      alert(data.message || 'Action executed.');
       fetchProducts();
       fetchOrders();
     } catch (err) {
@@ -269,18 +281,12 @@ function App() {
             </div>
           )}
 
-          {activeOrder && (
+          {activeOrders.length > 0 && (
             <div style={{ marginTop: '20px', padding: '12px', background: '#e9ecef', borderRadius: '6px' }}>
               <h4>Mock Payment Gateway</h4>
-              <p><small>Order ID: {activeOrder._id}</small></p>
-              <p><strong>Total: LKR {activeOrder.totalAmount}</strong></p>
-              <p style={{ marginTop: '5px' }}>
-                Time Remaining: <CountdownTimer expiresAt={activeOrder.expiresAt || activeOrder.reservedUntil} />
-              </p>
+              <p><small>Active Reserved Items: {activeOrders.length}</small></p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
-                <button className="btn btn-success" onClick={() => handleMockPayment('success')}>Simulate Payment Success</button>
-                <button className="btn btn-disabled" style={{ background: '#dc3545', color: '#fff' }} onClick={() => handleMockPayment('failure')}>Simulate Payment Failure</button>
-                <button className="btn btn-disabled" style={{ background: '#ffc107', color: '#000' }} onClick={() => handleMockPayment('timeout')}>Simulate Payment Timeout</button>
+                <button className="btn btn-success" onClick={handleMockPayment}>Simulate Payment Success</button>
               </div>
             </div>
           )}
@@ -294,7 +300,7 @@ function App() {
           <thead>
             <tr style={{ background: '#f1f1f1', textAlign: 'left' }}>
               <th>Order ID</th>
-              <th>Total</th>
+              <th>Quantity</th>
               <th>Status</th>
               <th>Time Remaining</th>
               <th>Action</th>
@@ -304,17 +310,17 @@ function App() {
             {orders.map((o) => (
               <tr key={o._id} style={{ borderBottom: '1px solid #ddd' }}>
                 <td>{o._id}</td>
-                <td>LKR {o.totalAmount}</td>
+                <td>{o.quantity}</td>
                 <td><strong>{o.status}</strong></td>
                 <td>
                   {['RESERVED', 'Reserved'].includes(o.status) ? (
-                    <CountdownTimer expiresAt={o.expiresAt || o.reservedUntil} />
+                    <CountdownTimer expiresAt={new Date(new Date(o.createdAt).getTime() + 5 * 60000)} />
                   ) : (
                     'N/A'
                   )}
                 </td>
                 <td>
-                  {['RESERVED', 'Reserved', 'PAID', 'Paid'].includes(o.status) && (
+                  {['RESERVED', 'Reserved'].includes(o.status) && (
                     <button className="btn btn-disabled" style={{ background: '#dc3545', color: '#fff', padding: '4px 8px' }} onClick={() => handleCancelOrder(o._id)}>
                       Cancel Order
                     </button>
