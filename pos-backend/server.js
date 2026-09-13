@@ -1,28 +1,52 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
-const Order = require('./models/Order'); // Model එක import කරගන්න
+require('dotenv').config();
 
 const app = express();
+app.use(cors());
 app.use(express.json());
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
 
+// Global variable to cache the DB connection in Vercel Serverless
+let cachedDb = null;
+
+const connectDB = async () => {
+  if (cachedDb && mongoose.connection.readyState === 1) {
+    return cachedDb;
+  }
+
+  const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
+
+  if (!MONGO_URI) {
+    throw new Error("MONGO_URI is not defined in environment variables!");
+  }
+
+  // Connect without buffering to prevent 10000ms timeouts on serverless functions
+  cachedDb = await mongoose.connect(MONGO_URI, {
+    bufferCommands: false,
+  });
+
+  console.log('MongoDB Connected Successfully');
+  return cachedDb;
+};
+
+// Middleware to ensure DB is connected on every API request
+app.use(async (req, res, next) => {
+  try {
+    await connectDB();
+    next();
+  } catch (err) {
+    console.error('Database connection middleware error:', err);
+    res.status(500).json({ error: 'Database connection failed: ' + err.message });
+  }
+});
+
+// Root Health Check Route
 app.get('/', (req, res) => {
   res.send('POS Backend API is Running Successfully!');
 });
 
-const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/pos-system';
-
-// MongoDB Connection
-mongoose.connect(MONGO_URI)
-  .then(() => console.log('MongoDB Connected Successfully'))
-  .catch((err) => console.error('MongoDB Connection Error:', err));
-
-// Product Schema
+// Product Schema & Model
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   price: { type: Number, required: true },
@@ -30,31 +54,18 @@ const productSchema = new mongoose.Schema({
 });
 const Product = mongoose.model('Product', productSchema);
 
-// Background Worker: Auto-Expire Reservations (Runs every 10s)
-setInterval(async () => {
-  try {
-    const expiredOrders = await Order.find({
-      status: 'RESERVED',
-      expiresAt: { $lt: new Date() }
-    });
+// Order Schema & Model (Stock Reservation Logic)
+const orderSchema = new mongoose.Schema({
+  productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
+  quantity: { type: Number, required: true },
+  status: { type: String, enum: ['RESERVED', 'COMPLETED', 'EXPIRED'], default: 'RESERVED' },
+  createdAt: { type: Date, default: Date.now, expires: 300 } // Auto-expire after 5 minutes
+});
+const Order = mongoose.model('Order', orderSchema);
 
-    for (const order of expiredOrders) {
-      order.status = 'EXPIRED';
-      await order.save();
+// --- API ROUTES ---
 
-      for (const item of order.items) {
-        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.quantity } });
-      }
-      console.log(`[EXPIRED] Order ${order._id} auto-expired. Stock released.`);
-    }
-  } catch (err) {
-    console.error('Error in expiration worker:', err);
-  }
-}, 10000);
-
-// API Routes
-
-// Get Products
+// 1. Get All Products
 app.get('/api/products', async (req, res) => {
   try {
     const products = await Product.find();
@@ -64,152 +75,70 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// Add Product
+// 2. Add New Product
 app.post('/api/products', async (req, res) => {
   try {
     const { name, price, stock } = req.body;
-    const newProduct = new Product({ name, price, stock });
-    await newProduct.save();
-    res.status(201).json(newProduct);
-  } catch (err) {
-    res.status(400).json({ error: err.message });
-  }
-});
-
-// Delete Product
-app.delete('/api/products/:id', async (req, res) => {
-  try {
-    const product = await Product.findByIdAndDelete(req.params.id);
-    if (!product) return res.status(404).json({ error: 'Product not found' });
-    res.json({ message: 'Product deleted successfully', id: req.params.id });
+    if (!name || price === undefined || stock === undefined) {
+      return res.status(400).json({ error: 'All fields (name, price, stock) are required' });
+    }
+    const product = new Product({ name, price: Number(price), stock: Number(stock) });
+    await product.save();
+    res.status(201).json(product);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Reserve Stock (5-Min Lock)
+// 3. Reserve Stock (Concurrency-Safe)
 app.post('/api/orders/reserve', async (req, res) => {
-  const { items } = req.body;
-
   try {
-    let totalAmount = 0;
-    const orderItems = [];
+    const { productId, quantity } = req.body;
+    const qty = Number(quantity);
 
-    for (const item of items) {
-      const product = await Product.findOneAndUpdate(
-        { _id: item.productId, stock: { $gte: item.quantity } },
-        { $inc: { stock: -item.quantity } },
-        { returnDocument: 'after' }
-      );
+    // Atomic update to prevent race conditions
+    const updatedProduct = await Product.findOneAndUpdate(
+      { _id: productId, stock: { $gte: qty } },
+      { $inc: { stock: -qty } },
+      { new: true }
+    );
 
-      if (!product) {
-        for (const rolledItem of orderItems) {
-          await Product.findByIdAndUpdate(rolledItem.productId, { $inc: { stock: rolledItem.quantity } });
-        }
-        return res.status(400).json({ error: `Insufficient stock for item ${item.name || item.productId}` });
-      }
-
-      totalAmount += product.price * item.quantity;
-      orderItems.push({
-        productId: product._id,
-        name: product.name,
-        price: product.price,
-        quantity: item.quantity
-      });
+    if (!updatedProduct) {
+      return res.status(400).json({ error: 'Insufficient stock or product not found' });
     }
 
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
-    const order = new Order({
-      items: orderItems,
-      totalAmount,
-      status: 'RESERVED',
-      expiresAt
-    });
-
-    await order.save();
-    res.status(201).json({ message: 'Order created & Stock Reserved', order });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Mock Payment API
-app.post('/api/orders/pay', async (req, res) => {
-  const { orderId, outcome, idempotencyKey } = req.body;
-
-  try {
-    const order = await Order.findById(orderId);
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-
-    if (order.status !== 'RESERVED') {
-      return res.status(400).json({ error: `Order cannot be paid. Current status: ${order.status}` });
-    }
-
-    if (idempotencyKey && order.idempotencyKey === idempotencyKey) {
-      return res.status(400).json({ error: 'Duplicate payment submission detected.' });
-    }
-
-    if (idempotencyKey) order.idempotencyKey = idempotencyKey;
-
-    if (outcome === 'success') {
-      order.status = 'PAID';
-      await order.save();
-      return res.json({ success: true, message: 'Payment Successful! Order Confirmed.', order });
-    } else if (outcome === 'failure') {
-      order.status = 'FAILED';
-      await order.save();
-      for (const item of order.items) {
-        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.quantity } });
-      }
-      return res.json({ success: false, message: 'Payment Failed. Stock Restored.', order });
-    } else if (outcome === 'timeout') {
-      order.status = 'EXPIRED';
-      await order.save();
-      for (const item of order.items) {
-        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.quantity } });
-      }
-      return res.json({ success: false, message: 'Payment Timed Out. Stock Restored.', order });
-    }
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
-
-// Cancel Order
-app.post('/api/orders/cancel', async (req, res) => {
-  const { orderId } = req.body;
-
-  try {
-    const order = await Order.findById(orderId);
-    if (!order) return res.status(404).json({ error: 'Order not found' });
-
-    if (['CANCELLED', 'EXPIRED'].includes(order.status)) {
-      return res.status(400).json({ error: 'Order is already closed.' });
-    }
-
-    for (const item of order.items) {
-      await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.quantity } });
-    }
-
-    order.status = 'CANCELLED';
+    const order = new Order({ productId, quantity: qty });
     await order.save();
 
-    res.json({ message: 'Order Cancelled Successfully. Stock restored.', order });
+    res.status(201).json({ message: 'Stock reserved successfully', order });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// Get All Orders
-app.get('/api/orders', async (req, res) => {
+// 4. Complete Order (Payment Gateway Simulation)
+app.post('/api/orders/complete', async (req, res) => {
   try {
-    const orders = await Order.find().sort({ createdAt: -1 });
-    res.json(orders);
+    const { orderId } = req.body;
+    const order = await Order.findById(orderId);
+
+    if (!order || order.status !== 'RESERVED') {
+      return res.status(400).json({ error: 'Invalid or expired order' });
+    }
+
+    order.status = 'COMPLETED';
+    await order.save();
+
+    res.json({ message: 'Payment successful, order completed!', order });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// Local Development Server Listener
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+}
+
+module.exports = app;
