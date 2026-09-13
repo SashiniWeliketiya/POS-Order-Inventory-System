@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 
+// Dynamic API Base URL Configuration (Ends without trailing slash to avoid double-slash errors)
+const API_BASE_URL = (
+  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+    ? 'http://localhost:5000'
+    : 'https://pos-backend-api-delta.vercel.app'
+).replace(/\/$/, '');
+
 // Live Countdown Timer Component
 function CountdownTimer({ reservedUntil }) {
   const [timeLeft, setTimeLeft] = useState('');
@@ -43,21 +50,21 @@ function App() {
 
   const fetchProducts = async () => {
     try {
-      const res = await fetch('http://localhost:5000/api/products');
+      const res = await fetch(`${API_BASE_URL}/api/products`);
       const data = await res.json();
-      setProducts(data);
+      if (Array.isArray(data)) setProducts(data);
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching products:', err);
     }
   };
 
   const fetchOrders = async () => {
     try {
-      const res = await fetch('http://localhost:5000/api/orders');
+      const res = await fetch(`${API_BASE_URL}/api/orders`);
       const data = await res.json();
-      setOrders(data);
+      if (Array.isArray(data)) setOrders(data);
     } catch (err) {
-      console.error(err);
+      console.error('Error fetching orders:', err);
     }
   };
 
@@ -67,23 +74,60 @@ function App() {
     const interval = setInterval(() => {
       fetchProducts();
       fetchOrders();
-    }, 2000); // 2-second polling for real-time status update
+    }, 2000);
     return () => clearInterval(interval);
   }, []);
 
   const handleAddProduct = async (e) => {
     e.preventDefault();
-    await fetch('http://localhost:5000/api/products', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name: newProduct.name,
-        price: Number(newProduct.price),
-        stock: Number(newProduct.stock),
-      }),
-    });
-    setNewProduct({ name: '', price: '', stock: '' });
-    fetchProducts();
+
+    if (!newProduct.name || !newProduct.price || !newProduct.stock) {
+      alert('Please fill in all product details.');
+      return;
+    }
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/products`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: newProduct.name,
+          price: Number(newProduct.price),
+          stock: Number(newProduct.stock),
+        }),
+      });
+
+      if (res.ok) {
+        setNewProduct({ name: '', price: '', stock: '' });
+        fetchProducts();
+      } else {
+        const errData = await res.json();
+        alert(`Error: ${errData.error}`);
+      }
+    } catch (err) {
+      console.error('Failed to add product:', err);
+      alert('Failed to connect to backend server!');
+    }
+  };
+
+  const handleDeleteProduct = async (id) => {
+    if (!window.confirm('Are you sure you want to delete this product?')) return;
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/products/${id}`, {
+        method: 'DELETE',
+      });
+
+      if (res.ok) {
+        fetchProducts();
+      } else {
+        const errData = await res.json();
+        alert(`Error: ${errData.error}`);
+      }
+    } catch (err) {
+      console.error('Failed to delete product:', err);
+      alert('Failed to delete product from server.');
+    }
   };
 
   const addToCart = (product) => {
@@ -100,52 +144,64 @@ function App() {
 
   const handleCreateOrder = async () => {
     if (cart.length === 0) return;
-    const res = await fetch('http://localhost:5000/api/orders/reserve', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: cart }),
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/orders/reserve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items: cart }),
+      });
 
-    const data = await res.json();
-    if (res.ok) {
-      setActiveOrder(data.order);
-      setCart([]);
-      fetchProducts();
-      fetchOrders();
-    } else {
-      alert(data.error);
+      const data = await res.json();
+      if (res.ok) {
+        setActiveOrder(data.order);
+        setCart([]);
+        fetchProducts();
+        fetchOrders();
+      } else {
+        alert(data.error);
+      }
+    } catch (err) {
+      alert('Failed to reserve stock.');
     }
   };
 
   const handleMockPayment = async (outcome) => {
     if (!activeOrder) return;
-    const res = await fetch('http://localhost:5000/api/orders/pay', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        orderId: activeOrder._id,
-        outcome,
-        idempotencyKey: `PAY-${activeOrder._id}-${Date.now()}`
-      }),
-    });
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/orders/pay`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orderId: activeOrder._id,
+          outcome,
+          idempotencyKey: `PAY-${activeOrder._id}-${Date.now()}`
+        }),
+      });
 
-    const data = await res.json();
-    alert(data.message);
-    setActiveOrder(null);
-    fetchProducts();
-    fetchOrders();
+      const data = await res.json();
+      alert(data.message);
+      setActiveOrder(null);
+      fetchProducts();
+      fetchOrders();
+    } catch (err) {
+      alert('Payment processing error.');
+    }
   };
 
   const handleCancelOrder = async (orderId) => {
-    const res = await fetch('http://localhost:5000/api/orders/cancel', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ orderId }),
-    });
-    const data = await res.json();
-    alert(data.message);
-    fetchProducts();
-    fetchOrders();
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/orders/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId }),
+      });
+      const data = await res.json();
+      alert(data.message);
+      fetchProducts();
+      fetchOrders();
+    } catch (err) {
+      alert('Failed to cancel order.');
+    }
   };
 
   return (
@@ -157,28 +213,62 @@ function App() {
 
       {/* Add Product Section */}
       <section className="card add-product-card">
-        <h3>Add New Product</h3>
+        <h3>Add New Product to Inventory</h3>
         <form onSubmit={handleAddProduct} className="form-row">
-          <input type="text" placeholder="Product Name" value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} required />
-          <input type="number" placeholder="Price (LKR)" value={newProduct.price} onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })} required />
-          <input type="number" placeholder="Stock" value={newProduct.stock} onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })} required />
-          <button type="submit" className="btn btn-primary">Add Product</button>
+          <input 
+            type="text" 
+            placeholder="Product Name" 
+            value={newProduct.name} 
+            onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} 
+            required 
+          />
+          <input 
+            type="number" 
+            placeholder="Price (LKR)" 
+            value={newProduct.price} 
+            onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })} 
+            required 
+          />
+          <input 
+            type="number" 
+            placeholder="Stock Quantity" 
+            value={newProduct.stock} 
+            onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })} 
+            required 
+          />
+          <button type="submit" className="btn btn-primary">+ Add Item</button>
         </form>
       </section>
 
       <div className="main-content">
         {/* Available Products */}
         <section className="products-section">
-          <h2>Available Products</h2>
+          <h2>Live Inventory Products</h2>
           <div className="product-grid">
             {products.map((p) => (
               <div key={p._id} className="product-card">
                 <h4>{p.name}</h4>
                 <p>Price: <strong>LKR {p.price}</strong></p>
-                <p className="stock-info">Stock: <span className={p.stock > 0 ? 'text-success' : 'text-danger'}>{p.stock} Available</span></p>
-                <button className={`btn ${p.stock > 0 ? 'btn-action' : 'btn-disabled'}`} disabled={p.stock <= 0} onClick={() => addToCart(p)}>
-                  Add to Cart
-                </button>
+                <p className="stock-info">
+                  Available Stock: <span className={p.stock > 0 ? 'text-success' : 'text-danger'}>{p.stock}</span>
+                </p>
+                <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                  <button 
+                    className={`btn ${p.stock > 0 ? 'btn-action' : 'btn-disabled'}`} 
+                    disabled={p.stock <= 0} 
+                    onClick={() => addToCart(p)}
+                    style={{ flex: 1 }}
+                  >
+                    {p.stock > 0 ? 'Add to Cart' : 'Out of Stock'}
+                  </button>
+                  <button 
+                    className="btn btn-disabled" 
+                    style={{ background: '#dc3545', color: '#fff', padding: '6px 12px' }} 
+                    onClick={() => handleDeleteProduct(p._id)}
+                  >
+                    Delete
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -191,25 +281,25 @@ function App() {
             <div>
               {cart.map((item) => (
                 <div key={item.productId} className="cart-item">
-                  <span>{item.name} (x{item.qty})</span>
+                  <span>{item.name} × {item.qty}</span>
                   <span>LKR {item.price * item.qty}</span>
                 </div>
               ))}
               <button className="btn btn-primary" style={{ width: '100%', marginTop: '10px' }} onClick={handleCreateOrder}>
-                Proceed to Checkout (Reserve Stock)
+                Reserve Stock & Checkout
               </button>
             </div>
           )}
 
           {activeOrder && (
-            <div style={{ marginTop: '20px', padding: '10px', background: '#e9ecef', borderRadius: '5px' }}>
+            <div style={{ marginTop: '20px', padding: '12px', background: '#e9ecef', borderRadius: '6px' }}>
               <h4>Mock Payment Gateway</h4>
               <p><small>Order ID: {activeOrder._id}</small></p>
               <p><strong>Total: LKR {activeOrder.totalAmount}</strong></p>
               <p style={{ marginTop: '5px' }}>
                 Time Remaining: <CountdownTimer reservedUntil={activeOrder.reservedUntil} />
               </p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '10px' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
                 <button className="btn btn-success" onClick={() => handleMockPayment('success')}>Simulate Payment Success</button>
                 <button className="btn btn-disabled" style={{ background: '#dc3545', color: '#fff' }} onClick={() => handleMockPayment('failure')}>Simulate Payment Failure</button>
                 <button className="btn btn-disabled" style={{ background: '#ffc107', color: '#000' }} onClick={() => handleMockPayment('timeout')}>Simulate Payment Timeout</button>
@@ -219,9 +309,9 @@ function App() {
         </aside>
       </div>
 
-      {/* Order Lifecycle Table with Live Countdown */}
+      {/* Order Lifecycle Table */}
       <section className="card" style={{ marginTop: '30px' }}>
-        <h3>Order Lifecycle Management</h3>
+        <h3>Order Audit History & Lifecycle Log</h3>
         <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
           <thead>
             <tr style={{ background: '#f1f1f1', textAlign: 'left' }}>
