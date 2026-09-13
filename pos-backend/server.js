@@ -7,7 +7,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Global connection promise for Vercel Serverless Function caching
 let cachedPromise = null;
 
 const connectDB = async () => {
@@ -38,7 +37,6 @@ const connectDB = async () => {
   return mongoose.connection;
 };
 
-// Middleware: Ensure Database Connection Before Processing Requests
 app.use(async (req, res, next) => {
   try {
     await connectDB();
@@ -49,13 +47,11 @@ app.use(async (req, res, next) => {
   }
 });
 
-// Root Health Check Route
 app.get('/', (req, res) => {
   res.send('POS Backend API is Running Successfully!');
 });
 
 // --- SCHEMAS & MODELS ---
-
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   price: { type: Number, required: true },
@@ -66,7 +62,7 @@ const Product = mongoose.models.Product || mongoose.model('Product', productSche
 const orderSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
   quantity: { type: Number, required: true },
-  status: { type: String, enum: ['RESERVED', 'COMPLETED', 'EXPIRED'], default: 'RESERVED' },
+  status: { type: String, enum: ['RESERVED', 'COMPLETED', 'CANCELLED', 'EXPIRED'], default: 'RESERVED' },
   createdAt: { type: Date, default: Date.now, expires: 300 }
 });
 const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
@@ -83,11 +79,20 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// 2. Add New Product (Includes NaN & Data Validation)
+// 2. Get All Orders (Order Audit Log එක සදහා)
+app.get('/api/orders', async (req, res) => {
+  try {
+    const orders = await Order.find().sort({ createdAt: -1 });
+    res.json(orders);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Add New Product
 app.post('/api/products', async (req, res) => {
   try {
     const { name, price, stock } = req.body;
-
     const parsedPrice = Number(price);
     const parsedStock = Number(stock);
 
@@ -97,12 +102,7 @@ app.post('/api/products', async (req, res) => {
       });
     }
 
-    const product = new Product({ 
-      name, 
-      price: parsedPrice, 
-      stock: parsedStock 
-    });
-
+    const product = new Product({ name, price: parsedPrice, stock: parsedStock });
     await product.save();
     res.status(201).json(product);
   } catch (err) {
@@ -110,14 +110,14 @@ app.post('/api/products', async (req, res) => {
   }
 });
 
-// 3. Reserve Stock (Concurrency-Safe)
+// 4. Reserve Stock
 app.post('/api/orders/reserve', async (req, res) => {
   try {
     const { productId, quantity } = req.body;
     const qty = Number(quantity);
 
-    if (isNaN(qty) || qty <= 0) {
-      return res.status(400).json({ error: 'Please provide a valid quantity to reserve' });
+    if (!productId || isNaN(qty) || qty <= 0) {
+      return res.status(400).json({ error: 'Please provide a valid product and quantity to reserve' });
     }
 
     const updatedProduct = await Product.findOneAndUpdate(
@@ -139,7 +139,7 @@ app.post('/api/orders/reserve', async (req, res) => {
   }
 });
 
-// 4. Complete Order (Payment Simulation)
+// 5. Complete Order (Payment Simulation)
 app.post('/api/orders/complete', async (req, res) => {
   try {
     const { orderId } = req.body;
@@ -158,7 +158,28 @@ app.post('/api/orders/complete', async (req, res) => {
   }
 });
 
-// Local Development Server Listener
+// 6. Cancel Order (Restores Stock)
+app.post('/api/orders/cancel', async (req, res) => {
+  try {
+    const { orderId } = req.body;
+    const order = await Order.findById(orderId);
+
+    if (!order || order.status !== 'RESERVED') {
+      return res.status(400).json({ error: 'Order cannot be cancelled' });
+    }
+
+    // Restore stock back to product
+    await Product.findByIdAndUpdate(order.productId, { $inc: { stock: order.quantity } });
+    
+    order.status = 'CANCELLED';
+    await order.save();
+
+    res.json({ message: 'Order cancelled and stock restored!', order });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
