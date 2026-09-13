@@ -1,12 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 
-// Dynamic API Base URL Configuration (Ends without trailing slash to avoid double-slash errors)
-const API_BASE_URL = (
-  window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-    ? 'http://localhost:5000'
-    : 'https://pos-backend-api-delta.vercel.app'
-).replace(/\/$/, '');
+// Dynamic API Base URL Configuration
+const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+  ? 'http://localhost:5000'
+  : 'https://pos-backend-api-delta.vercel.app/'; // Replace with your deployed backend URL
 
 // Live Countdown Timer Component
 function CountdownTimer({ reservedUntil }) {
@@ -79,7 +77,7 @@ function App() {
   }, []);
 
   const handleAddProduct = async (e) => {
-    e.preventDefault();
+    e.preventDefault(); // Prevents page reload on button click
 
     if (!newProduct.name || !newProduct.price || !newProduct.stock) {
       alert('Please fill in all product details.');
@@ -107,26 +105,6 @@ function App() {
     } catch (err) {
       console.error('Failed to add product:', err);
       alert('Failed to connect to backend server!');
-    }
-  };
-
-  const handleDeleteProduct = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this product?')) return;
-
-    try {
-      const res = await fetch(`${API_BASE_URL}/api/products/${id}`, {
-        method: 'DELETE',
-      });
-
-      if (res.ok) {
-        fetchProducts();
-      } else {
-        const errData = await res.json();
-        alert(`Error: ${errData.error}`);
-      }
-    } catch (err) {
-      console.error('Failed to delete product:', err);
-      alert('Failed to delete product from server.');
     }
   };
 
@@ -252,23 +230,13 @@ function App() {
                 <p className="stock-info">
                   Available Stock: <span className={p.stock > 0 ? 'text-success' : 'text-danger'}>{p.stock}</span>
                 </p>
-                <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
-                  <button 
-                    className={`btn ${p.stock > 0 ? 'btn-action' : 'btn-disabled'}`} 
-                    disabled={p.stock <= 0} 
-                    onClick={() => addToCart(p)}
-                    style={{ flex: 1 }}
-                  >
-                    {p.stock > 0 ? 'Add to Cart' : 'Out of Stock'}
-                  </button>
-                  <button 
-                    className="btn btn-disabled" 
-                    style={{ background: '#dc3545', color: '#fff', padding: '6px 12px' }} 
-                    onClick={() => handleDeleteProduct(p._id)}
-                  >
-                    Delete
-                  </button>
-                </div>
+                <button 
+                  className={`btn ${p.stock > 0 ? 'btn-action' : 'btn-disabled'}`} 
+                  disabled={p.stock <= 0} 
+                  onClick={() => addToCart(p)}
+                >
+                  {p.stock > 0 ? 'Add to Cart' : 'Out of Stock'}
+                </button>
               </div>
             ))}
           </div>
