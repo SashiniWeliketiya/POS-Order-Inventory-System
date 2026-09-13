@@ -1,6 +1,6 @@
 # POS Order & Inventory Management System
 
-Live Demo (Frontend): [https://pos-order-inventory-system1-8s4jtkqqv-sashini.vercel.app](https://pos-order-inventory-system1-8s4jtkqqv-sashini.vercel.app)
+Live Demo (Frontend):https://pos-order-inventory-system1.vercel.app/
 
 Backend API URL: [https://pos-backend-mc643n9oc-sashini.vercel.app](https://pos-backend-mc643n9oc-sashini.vercel.app)
 
