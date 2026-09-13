@@ -3,85 +3,215 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 
 const app = express();
-const cors = require('cors');
-
-
-app.use(cors({
-  origin: '*',
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
-  allowedHeaders: ['Content-Type', 'Authorization']
-}));
-// Middleware Setup
-app.use(cors());
 app.use(express.json());
+app.use(cors());
 
+// MongoDB Connection (Support for Standalone & Replica set environments)
+mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/pos-system?retryWrites=false')
+  .then(() => console.log('MongoDB Connected Successfully'))
+  .catch((err) => console.error('MongoDB Connection Error:', err));
 
-const MONGODB_URI = process.env.MONGODB_URI || "mongodb+srv://sashini:sashini123@cluster0.xxx.mongodb.net/pos_system?retryWrites=true&w=majority";
+// Schemas
+const productSchema = new mongoose.Schema({
+  name: { type: String, required: true },
+  price: { type: Number, required: true },
+  stock: { type: Number, required: true },
+});
 
-let isConnected = false;
+const orderSchema = new mongoose.Schema({
+  items: [
+    {
+      productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+      name: String,
+      price: Number,
+      qty: Number
+    }
+  ],
+  totalAmount: Number,
+  status: {
+    type: String,
+    enum: ['Reserved', 'Paid', 'Failed', 'Expired', 'Cancelled'],
+    default: 'Reserved'
+  },
+  reservedUntil: { type: Date, required: true },
+  idempotencyKey: { type: String, unique: true, sparse: true }
+}, { timestamps: true });
 
-// Serverless DB Connection Handler
-const connectDB = async () => {
-  if (isConnected) return;
+const Product = mongoose.model('Product', productSchema);
+const Order = mongoose.model('Order', orderSchema);
+
+// Background Worker: 5-Minute Auto Expiration Cron (Runs every 10 seconds)
+setInterval(async () => {
   try {
-    const db = await mongoose.connect(MONGODB_URI, {
-      serverSelectionTimeoutMS: 5000,
+    const expiredOrders = await Order.find({
+      status: 'Reserved',
+      reservedUntil: { $lt: new Date() }
     });
-    isConnected = db.connections[0].readyState;
-    console.log("MongoDB Connected Successfully");
+
+    for (const order of expiredOrders) {
+      order.status = 'Expired';
+      await order.save();
+
+      // Release stock back to products
+      for (const item of order.items) {
+        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.qty } });
+      }
+      console.log(`[EXPIRED] Order ${order._id} auto-expired. Stock restored.`);
+    }
   } catch (err) {
-    console.error("MongoDB Connection Error:", err);
+    console.error('Error handling expired reservations:', err);
   }
-};
+}, 10000);
 
-// Global Connection Middleware
-app.use(async (req, res, next) => {
-  await connectDB();
-  next();
-});
+// API Routes
 
-// Root Health Check Route
-app.get('/', (req, res) => {
-  res.send('POS Backend API is running successfully!');
-});
-
-// 1. GET ALL PRODUCTS
+// 1. Get All Products
 app.get('/api/products', async (req, res) => {
   try {
-    const products = await mongoose.connection.db.collection('products').find({}).toArray();
+    const products = await Product.find();
     res.json(products);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-// 2. ADD NEW PRODUCT (POST)
+// 2. Add New Product
 app.post('/api/products', async (req, res) => {
   try {
     const { name, price, stock } = req.body;
-    
-    if (!name || !price) {
-      return res.status(400).json({ error: "Name and price are required" });
+    const newProduct = new Product({ name, price, stock });
+    await newProduct.save();
+    res.status(201).json(newProduct);
+  } catch (err) {
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// 3. Create Order & Reserve Stock (Local DB Safe without Session Errors)
+app.post('/api/orders/reserve', async (req, res) => {
+  const { items } = req.body;
+
+  try {
+    let totalAmount = 0;
+    const orderItems = [];
+
+    for (const item of items) {
+      // Atomic decrement: stock >= qty නම් පමණක් stock adu කරයි
+      const product = await Product.findOneAndUpdate(
+        { _id: item.productId, stock: { $gte: item.qty } },
+        { $inc: { stock: -item.qty } },
+        { returnDocument: 'after' }
+      );
+
+      if (!product) {
+        // Rollback previously decremented items in this loop if stock fails
+        for (const rolledItem of orderItems) {
+          await Product.findByIdAndUpdate(rolledItem.productId, { $inc: { stock: rolledItem.qty } });
+        }
+        return res.status(400).json({ error: `Insufficient stock for item ${item.name || item.productId}` });
+      }
+
+      totalAmount += product.price * item.qty;
+      orderItems.push({
+        productId: product._id,
+        name: product.name,
+        price: product.price,
+        qty: item.qty
+      });
     }
 
-    const newProduct = {
-      name,
-      price: Number(price),
-      stock: Number(stock) || 0,
-      createdAt: new Date()
-    };
+    // 5-minute reservation timer
+    const reservedUntil = new Date(Date.now() + 5 * 60 * 1000);
 
-    const result = await mongoose.connection.db.collection('products').insertOne(newProduct);
-    res.status(201).json({ success: true, insertedId: result.insertedId });
+    const order = new Order({
+      items: orderItems,
+      totalAmount,
+      status: 'Reserved',
+      reservedUntil
+    });
+
+    await order.save();
+    res.status(201).json({ message: 'Order created & Stock Reserved for 5 Minutes', order });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// 4. Mock Payment Gateway API (Success, Failure, Timeout & Idempotency)
+app.post('/api/orders/pay', async (req, res) => {
+  const { orderId, outcome, idempotencyKey } = req.body;
 
+  try {
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (order.status !== 'Reserved') {
+      return res.status(400).json({ error: `Order cannot be paid. Current status: ${order.status}` });
+    }
+
+    // Duplicate submission prevention
+    if (idempotencyKey && order.idempotencyKey === idempotencyKey) {
+      return res.status(400).json({ error: 'Duplicate payment submission detected.' });
+    }
+
+    if (idempotencyKey) order.idempotencyKey = idempotencyKey;
+
+    if (outcome === 'success') {
+      order.status = 'Paid';
+      await order.save();
+      return res.json({ success: true, message: 'Payment Successful! Order Confirmed.', order });
+    } else if (outcome === 'failure') {
+      order.status = 'Failed';
+      await order.save();
+      // Revert stock on failure
+      for (const item of order.items) {
+        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.qty } });
+      }
+      return res.json({ success: false, message: 'Payment Failed. Stock Released.', order });
+    } else if (outcome === 'timeout') {
+      order.status = 'Expired';
+      await order.save();
+      // Revert stock on timeout
+      for (const item of order.items) {
+        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.qty } });
+      }
+      return res.json({ success: false, message: 'Payment Timed Out. Stock Released.', order });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 5. Cancel Order Endpoint
+app.post('/api/orders/cancel', async (req, res) => {
+  const { orderId } = req.body;
+
+  try {
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (['Cancelled', 'Expired'].includes(order.status)) {
+      return res.status(400).json({ error: 'Order is already closed.' });
+    }
+
+    // Restore stock
+    for (const item of order.items) {
+      await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.qty } });
+    }
+
+    order.status = 'Cancelled';
+    await order.save();
+
+    res.json({ message: 'Order Cancelled Successfully. Stock restored.', order });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 6. Get All Orders
 app.get('/api/orders', async (req, res) => {
   try {
-    const orders = await mongoose.connection.db.collection('orders').find({}).toArray();
+    const orders = await Order.find().sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -90,5 +220,3 @@ app.get('/api/orders', async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-module.exports = app;
