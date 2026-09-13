@@ -51,7 +51,7 @@ app.get('/', (req, res) => {
   res.send('POS Backend API is Running Successfully!');
 });
 
-// --- SCHEMAS & MODELS ---
+
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   price: { type: Number, required: true },
@@ -67,7 +67,6 @@ const orderSchema = new mongoose.Schema({
 });
 const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
 
-// --- API ROUTES ---
 
 // 1. Get All Products
 app.get('/api/products', async (req, res) => {
@@ -139,7 +138,7 @@ app.post('/api/orders/reserve', async (req, res) => {
   }
 });
 
-// 5. Complete Order (Payment Simulation)
+// 5. Complete Order
 app.post('/api/orders/complete', async (req, res) => {
   try {
     const { orderId } = req.body;
