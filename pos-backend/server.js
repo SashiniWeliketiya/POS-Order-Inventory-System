@@ -1,6 +1,7 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
+const Order = require('./models/Order'); // Model එක import කරගන්න
 
 const app = express();
 app.use(express.json());
@@ -15,42 +16,17 @@ app.get('/', (req, res) => {
 });
 
 // MongoDB Connection
-const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/pos-system';
-
-mongoose.connect(MONGO_URI, {
-  serverSelectionTimeoutMS: 5000
-})
+mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/pos-system?retryWrites=false')
   .then(() => console.log('MongoDB Connected Successfully'))
   .catch((err) => console.error('MongoDB Connection Error:', err));
 
-// Schemas
+// Product Schema
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   price: { type: Number, required: true },
   stock: { type: Number, required: true },
 });
-
-const orderSchema = new mongoose.Schema({
-  items: [
-    {
-      productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
-      name: String,
-      price: Number,
-      quantity: Number
-    }
-  ],
-  totalAmount: Number,
-  status: {
-    type: String,
-    enum: ['RESERVED', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED'],
-    default: 'RESERVED'
-  },
-  expiresAt: { type: Date, required: true },
-  idempotencyKey: { type: String, unique: true, sparse: true }
-}, { timestamps: true });
-
-const Product = mongoose.models.Product || mongoose.model('Product', productSchema);
-const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
+const Product = mongoose.model('Product', productSchema);
 
 // Background Worker: Auto-Expire Reservations (Runs every 10s)
 setInterval(async () => {
@@ -90,7 +66,7 @@ app.get('/api/products', async (req, res) => {
 app.post('/api/products', async (req, res) => {
   try {
     const { name, price, stock } = req.body;
-    const newProduct = new Product({ name, price: Number(price), stock: Number(stock) });
+    const newProduct = new Product({ name, price, stock });
     await newProduct.save();
     res.status(201).json(newProduct);
   } catch (err) {
@@ -98,7 +74,18 @@ app.post('/api/products', async (req, res) => {
   }
 });
 
-// Reserve Stock (5-Min Lock + Concurrency Safe)
+// Delete Product
+app.delete('/api/products/:id', async (req, res) => {
+  try {
+    const product = await Product.findByIdAndDelete(req.params.id);
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    res.json({ message: 'Product deleted successfully', id: req.params.id });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Reserve Stock (5-Min Lock)
 app.post('/api/orders/reserve', async (req, res) => {
   const { items } = req.body;
 
@@ -224,5 +211,3 @@ app.get('/api/orders', async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
-
-module.exports = app;
