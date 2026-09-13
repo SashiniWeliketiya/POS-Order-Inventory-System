@@ -7,26 +7,26 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Global connection promise for Vercel Serverless Function caching
+
 let cachedPromise = null;
 
 const connectDB = async () => {
-  // 1. Connection එක bereits active නම් එයම භාවිතා කරන්න
+  
   if (mongoose.connection.readyState === 1) {
     return mongoose.connection;
   }
 
-  // 2. MONGO_URI variable එක පරීක්ෂා කිරීම
+  
   const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
   if (!MONGO_URI) {
     throw new Error("MONGO_URI is missing in Vercel Environment Variables!");
   }
 
-  // 3. Multi-request වලදී අලුතින් duplicate connection ඇතිවීම වැළැක්වීම
+  
   if (!cachedPromise) {
     const opts = {
-      bufferCommands: true, // Query buffering සක්‍රියයි (await connectDB මගින් timeout වීම වළක්වයි)
-      serverSelectionTimeoutMS: 5000, // DB connect නොවුවහොත් තත්පර 5කින් error එක ලබාදෙයි
+      bufferCommands: true, 
+      serverSelectionTimeoutMS: 5000, 
     };
     cachedPromise = mongoose.connect(MONGO_URI, opts).then((m) => m);
   }
@@ -34,14 +34,14 @@ const connectDB = async () => {
   try {
     await cachedPromise;
   } catch (e) {
-    cachedPromise = null; // Connection එක fail වුවහොත් cache එක reset කරයි
+    cachedPromise = null; 
     throw e;
   }
 
   return mongoose.connection;
 };
 
-// Middleware: සාර්ථකව DB Connect වූ පසු පමණක් Request එක Route එකට යවයි
+// Middleware
 app.use(async (req, res, next) => {
   try {
     await connectDB();
