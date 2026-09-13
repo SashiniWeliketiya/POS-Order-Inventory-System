@@ -4,14 +4,22 @@ const cors = require('cors');
 
 const app = express();
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: '*',
+  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
 
 app.get('/', (req, res) => {
   res.send('POS Backend API is Running Successfully!');
 });
 
 // MongoDB Connection
-mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/pos-system?retryWrites=false')
+const MONGO_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/pos-system';
+
+mongoose.connect(MONGO_URI, {
+  serverSelectionTimeoutMS: 5000
+})
   .then(() => console.log('MongoDB Connected Successfully'))
   .catch((err) => console.error('MongoDB Connection Error:', err));
 
@@ -28,36 +36,36 @@ const orderSchema = new mongoose.Schema({
       productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
       name: String,
       price: Number,
-      qty: Number
+      quantity: Number
     }
   ],
   totalAmount: Number,
   status: {
     type: String,
-    enum: ['Reserved', 'Paid', 'Failed', 'Expired', 'Cancelled'],
-    default: 'Reserved'
+    enum: ['RESERVED', 'PAID', 'FAILED', 'EXPIRED', 'CANCELLED'],
+    default: 'RESERVED'
   },
-  reservedUntil: { type: Date, required: true },
+  expiresAt: { type: Date, required: true },
   idempotencyKey: { type: String, unique: true, sparse: true }
 }, { timestamps: true });
 
-const Product = mongoose.model('Product', productSchema);
-const Order = mongoose.model('Order', orderSchema);
+const Product = mongoose.models.Product || mongoose.model('Product', productSchema);
+const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
 
-// Background Worker: Auto-Expire Reservations older than 5 minutes (Runs every 10s)
+// Background Worker: Auto-Expire Reservations (Runs every 10s)
 setInterval(async () => {
   try {
     const expiredOrders = await Order.find({
-      status: 'Reserved',
-      reservedUntil: { $lt: new Date() }
+      status: 'RESERVED',
+      expiresAt: { $lt: new Date() }
     });
 
     for (const order of expiredOrders) {
-      order.status = 'Expired';
+      order.status = 'EXPIRED';
       await order.save();
 
       for (const item of order.items) {
-        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.qty } });
+        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.quantity } });
       }
       console.log(`[EXPIRED] Order ${order._id} auto-expired. Stock released.`);
     }
@@ -82,7 +90,7 @@ app.get('/api/products', async (req, res) => {
 app.post('/api/products', async (req, res) => {
   try {
     const { name, price, stock } = req.body;
-    const newProduct = new Product({ name, price, stock });
+    const newProduct = new Product({ name, price: Number(price), stock: Number(stock) });
     await newProduct.save();
     res.status(201).json(newProduct);
   } catch (err) {
@@ -100,34 +108,34 @@ app.post('/api/orders/reserve', async (req, res) => {
 
     for (const item of items) {
       const product = await Product.findOneAndUpdate(
-        { _id: item.productId, stock: { $gte: item.qty } },
-        { $inc: { stock: -item.qty } },
+        { _id: item.productId, stock: { $gte: item.quantity } },
+        { $inc: { stock: -item.quantity } },
         { returnDocument: 'after' }
       );
 
       if (!product) {
         for (const rolledItem of orderItems) {
-          await Product.findByIdAndUpdate(rolledItem.productId, { $inc: { stock: rolledItem.qty } });
+          await Product.findByIdAndUpdate(rolledItem.productId, { $inc: { stock: rolledItem.quantity } });
         }
         return res.status(400).json({ error: `Insufficient stock for item ${item.name || item.productId}` });
       }
 
-      totalAmount += product.price * item.qty;
+      totalAmount += product.price * item.quantity;
       orderItems.push({
         productId: product._id,
         name: product.name,
         price: product.price,
-        qty: item.qty
+        quantity: item.quantity
       });
     }
 
-    const reservedUntil = new Date(Date.now() + 5 * 60 * 1000);
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
     const order = new Order({
       items: orderItems,
       totalAmount,
-      status: 'Reserved',
-      reservedUntil
+      status: 'RESERVED',
+      expiresAt
     });
 
     await order.save();
@@ -145,7 +153,7 @@ app.post('/api/orders/pay', async (req, res) => {
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
-    if (order.status !== 'Reserved') {
+    if (order.status !== 'RESERVED') {
       return res.status(400).json({ error: `Order cannot be paid. Current status: ${order.status}` });
     }
 
@@ -156,21 +164,21 @@ app.post('/api/orders/pay', async (req, res) => {
     if (idempotencyKey) order.idempotencyKey = idempotencyKey;
 
     if (outcome === 'success') {
-      order.status = 'Paid';
+      order.status = 'PAID';
       await order.save();
       return res.json({ success: true, message: 'Payment Successful! Order Confirmed.', order });
     } else if (outcome === 'failure') {
-      order.status = 'Failed';
+      order.status = 'FAILED';
       await order.save();
       for (const item of order.items) {
-        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.qty } });
+        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.quantity } });
       }
       return res.json({ success: false, message: 'Payment Failed. Stock Restored.', order });
     } else if (outcome === 'timeout') {
-      order.status = 'Expired';
+      order.status = 'EXPIRED';
       await order.save();
       for (const item of order.items) {
-        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.qty } });
+        await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.quantity } });
       }
       return res.json({ success: false, message: 'Payment Timed Out. Stock Restored.', order });
     }
@@ -187,15 +195,15 @@ app.post('/api/orders/cancel', async (req, res) => {
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ error: 'Order not found' });
 
-    if (['Cancelled', 'Expired'].includes(order.status)) {
+    if (['CANCELLED', 'EXPIRED'].includes(order.status)) {
       return res.status(400).json({ error: 'Order is already closed.' });
     }
 
     for (const item of order.items) {
-      await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.qty } });
+      await Product.findByIdAndUpdate(item.productId, { $inc: { stock: item.quantity } });
     }
 
-    order.status = 'Cancelled';
+    order.status = 'CANCELLED';
     await order.save();
 
     res.json({ message: 'Order Cancelled Successfully. Stock restored.', order });
@@ -216,3 +224,5 @@ app.get('/api/orders', async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+module.exports = app;
