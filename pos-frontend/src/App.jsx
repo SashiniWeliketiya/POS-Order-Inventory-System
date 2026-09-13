@@ -1,12 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import './App.css';
 
-// Dynamic API Base URL Configuration
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
   ? 'http://localhost:5000'
   : 'https://pos-backend-api-delta.vercel.app';
 
-// Live Countdown Timer Component
 function CountdownTimer({ expiresAt }) {
   const [timeLeft, setTimeLeft] = useState('');
   const [isExpired, setIsExpired] = useState(false);
@@ -128,7 +126,6 @@ function App() {
     });
   };
 
-  // Cart එකෙන් Item එකක් Remove කිරීමට Function එක
   const removeFromCart = (productId) => {
     setCart((prevCart) => prevCart.filter((item) => item.productId !== productId));
   };
@@ -169,7 +166,8 @@ function App() {
     }
   };
 
-  const handleMockPayment = async () => {
+  // Payment Success simulation
+  const handleMockPaymentSuccess = async () => {
     if (activeOrders.length === 0) return;
 
     try {
@@ -187,6 +185,28 @@ function App() {
       fetchOrders();
     } catch (err) {
       alert('Payment processing error.');
+    }
+  };
+
+  // Payment Failure simulation (Cancels order & restores stock)
+  const handleMockPaymentFailure = async () => {
+    if (activeOrders.length === 0) return;
+
+    try {
+      for (const order of activeOrders) {
+        await fetch(`${API_BASE_URL}/api/orders/cancel`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ orderId: order._id }),
+        });
+      }
+
+      alert('Payment failed! Reserved stock has been released back to inventory.');
+      setActiveOrders([]);
+      fetchProducts();
+      fetchOrders();
+    } catch (err) {
+      alert('Error cancelling order on failure.');
     }
   };
 
@@ -298,8 +318,13 @@ function App() {
             <div style={{ marginTop: '20px', padding: '12px', background: '#e9ecef', borderRadius: '6px' }}>
               <h4>Mock Payment Gateway</h4>
               <p><small>Active Reserved Items: {activeOrders.length}</small></p>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
-                <button className="btn btn-success" onClick={handleMockPayment}>Simulate Payment Success</button>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '10px' }}>
+                <button className="btn btn-success" onClick={handleMockPaymentSuccess}>
+                  Simulate Payment Success
+                </button>
+                <button className="btn" style={{ background: '#dc3545', color: '#fff' }} onClick={handleMockPaymentFailure}>
+                  Simulate Payment Failure
+                </button>
               </div>
             </div>
           )}
