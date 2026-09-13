@@ -3,9 +3,9 @@ import './App.css';
 
 // Dynamic API Base URL Configuration
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? 'http://localhost:5000'
-  : 'https://pos-backend-api-delta.vercel.app/'; // Replace with your deployed backend URL
-
+  ? 'http://localhost:5000/api'
+  : 'https://pos-backend-api-delta.vercel.app/api';
+  
 // Live Countdown Timer Component
 function CountdownTimer({ reservedUntil }) {
   const [timeLeft, setTimeLeft] = useState('');
