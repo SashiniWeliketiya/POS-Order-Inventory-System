@@ -7,37 +7,48 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Global variable to cache the DB connection in Vercel Serverless
-let cachedDb = null;
+// Global connection promise for Vercel Serverless Function caching
+let cachedPromise = null;
 
 const connectDB = async () => {
-  if (cachedDb && mongoose.connection.readyState === 1) {
-    return cachedDb;
+  // 1. Connection එක bereits active නම් එයම භාවිතා කරන්න
+  if (mongoose.connection.readyState === 1) {
+    return mongoose.connection;
   }
 
+  // 2. MONGO_URI variable එක පරීක්ෂා කිරීම
   const MONGO_URI = process.env.MONGO_URI || process.env.MONGODB_URI;
-
   if (!MONGO_URI) {
-    throw new Error("MONGO_URI is not defined in environment variables!");
+    throw new Error("MONGO_URI is missing in Vercel Environment Variables!");
   }
 
-  // Connect without buffering to prevent 10000ms timeouts on serverless functions
-  cachedDb = await mongoose.connect(MONGO_URI, {
-    bufferCommands: false,
-  });
+  // 3. Multi-request වලදී අලුතින් duplicate connection ඇතිවීම වැළැක්වීම
+  if (!cachedPromise) {
+    const opts = {
+      bufferCommands: true, // Query buffering සක්‍රියයි (await connectDB මගින් timeout වීම වළක්වයි)
+      serverSelectionTimeoutMS: 5000, // DB connect නොවුවහොත් තත්පර 5කින් error එක ලබාදෙයි
+    };
+    cachedPromise = mongoose.connect(MONGO_URI, opts).then((m) => m);
+  }
 
-  console.log('MongoDB Connected Successfully');
-  return cachedDb;
+  try {
+    await cachedPromise;
+  } catch (e) {
+    cachedPromise = null; // Connection එක fail වුවහොත් cache එක reset කරයි
+    throw e;
+  }
+
+  return mongoose.connection;
 };
 
-// Middleware to ensure DB is connected on every API request
+// Middleware: සාර්ථකව DB Connect වූ පසු පමණක් Request එක Route එකට යවයි
 app.use(async (req, res, next) => {
   try {
     await connectDB();
     next();
   } catch (err) {
     console.error('Database connection middleware error:', err);
-    res.status(500).json({ error: 'Database connection failed: ' + err.message });
+    return res.status(500).json({ error: 'Database Connection Failed: ' + err.message });
   }
 });
 
@@ -46,22 +57,22 @@ app.get('/', (req, res) => {
   res.send('POS Backend API is Running Successfully!');
 });
 
-// Product Schema & Model
+// --- SCHEMAS & MODELS ---
+
 const productSchema = new mongoose.Schema({
   name: { type: String, required: true },
   price: { type: Number, required: true },
   stock: { type: Number, required: true },
 });
-const Product = mongoose.model('Product', productSchema);
+const Product = mongoose.models.Product || mongoose.model('Product', productSchema);
 
-// Order Schema & Model (Stock Reservation Logic)
 const orderSchema = new mongoose.Schema({
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', required: true },
   quantity: { type: Number, required: true },
   status: { type: String, enum: ['RESERVED', 'COMPLETED', 'EXPIRED'], default: 'RESERVED' },
   createdAt: { type: Date, default: Date.now, expires: 300 } // Auto-expire after 5 minutes
 });
-const Order = mongoose.model('Order', orderSchema);
+const Order = mongoose.models.Order || mongoose.model('Order', orderSchema);
 
 // --- API ROUTES ---
 
@@ -96,7 +107,6 @@ app.post('/api/orders/reserve', async (req, res) => {
     const { productId, quantity } = req.body;
     const qty = Number(quantity);
 
-    // Atomic update to prevent race conditions
     const updatedProduct = await Product.findOneAndUpdate(
       { _id: productId, stock: { $gte: qty } },
       { $inc: { stock: -qty } },
