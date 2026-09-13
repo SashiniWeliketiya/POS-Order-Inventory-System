@@ -3,17 +3,17 @@ import './App.css';
 
 // Dynamic API Base URL Configuration
 const API_BASE_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? 'http://localhost:5000/api'
-  : 'https://pos-backend-api-delta.vercel.app/api';
-  
+  ? 'http://localhost:5000'
+  : 'https://pos-backend-api-delta.vercel.app'; // Trailing slash ඉවත් කර ඇත
+
 // Live Countdown Timer Component
-function CountdownTimer({ reservedUntil }) {
+function CountdownTimer({ expiresAt }) {
   const [timeLeft, setTimeLeft] = useState('');
   const [isExpired, setIsExpired] = useState(false);
 
   useEffect(() => {
     const calculateTimeLeft = () => {
-      const difference = new Date(reservedUntil) - new Date();
+      const difference = new Date(expiresAt) - new Date();
       if (difference <= 0) {
         setTimeLeft('00:00');
         setIsExpired(true);
@@ -30,7 +30,7 @@ function CountdownTimer({ reservedUntil }) {
     calculateTimeLeft();
     const timer = setInterval(calculateTimeLeft, 1000);
     return () => clearInterval(timer);
-  }, [reservedUntil]);
+  }, [expiresAt]);
 
   return (
     <span style={{ color: isExpired ? '#dc3545' : '#28a745', fontWeight: 'bold' }}>
@@ -77,10 +77,21 @@ function App() {
   }, []);
 
   const handleAddProduct = async (e) => {
-    e.preventDefault(); // Prevents page reload on button click
+    e.preventDefault();
 
-    if (!newProduct.name || !newProduct.price || !newProduct.stock) {
-      alert('Please fill in all product details.');
+    if (!newProduct.name || newProduct.price === '' || newProduct.stock === '') {
+      alert('Please fill in all product details correctly.');
+      return;
+    }
+
+    const payload = {
+      name: newProduct.name.trim(),
+      price: Number(newProduct.price),
+      stock: Number(newProduct.stock)
+    };
+
+    if (isNaN(payload.price) || isNaN(payload.stock)) {
+      alert('Price and Stock must be valid numbers!');
       return;
     }
 
@@ -88,19 +99,16 @@ function App() {
       const res = await fetch(`${API_BASE_URL}/api/products`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: newProduct.name,
-          price: Number(newProduct.price),
-          stock: Number(newProduct.stock),
-        }),
+        body: JSON.stringify(payload),
       });
+
+      const data = await res.json();
 
       if (res.ok) {
         setNewProduct({ name: '', price: '', stock: '' });
         fetchProducts();
       } else {
-        const errData = await res.json();
-        alert(`Error: ${errData.error}`);
+        alert(`Error: ${data.error}`);
       }
     } catch (err) {
       console.error('Failed to add product:', err);
@@ -113,10 +121,10 @@ function App() {
       const existing = prevCart.find((i) => i.productId === product._id);
       if (existing) {
         return prevCart.map((i) =>
-          i.productId === product._id ? { ...i, qty: i.qty + 1 } : i
+          i.productId === product._id ? { ...i, quantity: i.quantity + 1 } : i
         );
       }
-      return [...prevCart, { productId: product._id, name: product.name, price: product.price, qty: 1 }];
+      return [...prevCart, { productId: product._id, name: product.name, price: product.price, quantity: 1 }];
     });
   };
 
@@ -206,6 +214,7 @@ function App() {
             value={newProduct.price} 
             onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })} 
             required 
+            min="1"
           />
           <input 
             type="number" 
@@ -213,6 +222,7 @@ function App() {
             value={newProduct.stock} 
             onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })} 
             required 
+            min="1"
           />
           <button type="submit" className="btn btn-primary">+ Add Item</button>
         </form>
@@ -249,8 +259,8 @@ function App() {
             <div>
               {cart.map((item) => (
                 <div key={item.productId} className="cart-item">
-                  <span>{item.name} × {item.qty}</span>
-                  <span>LKR {item.price * item.qty}</span>
+                  <span>{item.name} × {item.quantity}</span>
+                  <span>LKR {item.price * item.quantity}</span>
                 </div>
               ))}
               <button className="btn btn-primary" style={{ width: '100%', marginTop: '10px' }} onClick={handleCreateOrder}>
@@ -265,7 +275,7 @@ function App() {
               <p><small>Order ID: {activeOrder._id}</small></p>
               <p><strong>Total: LKR {activeOrder.totalAmount}</strong></p>
               <p style={{ marginTop: '5px' }}>
-                Time Remaining: <CountdownTimer reservedUntil={activeOrder.reservedUntil} />
+                Time Remaining: <CountdownTimer expiresAt={activeOrder.expiresAt || activeOrder.reservedUntil} />
               </p>
               <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '10px' }}>
                 <button className="btn btn-success" onClick={() => handleMockPayment('success')}>Simulate Payment Success</button>
@@ -297,14 +307,14 @@ function App() {
                 <td>LKR {o.totalAmount}</td>
                 <td><strong>{o.status}</strong></td>
                 <td>
-                  {o.status === 'Reserved' ? (
-                    <CountdownTimer reservedUntil={o.reservedUntil} />
+                  {['RESERVED', 'Reserved'].includes(o.status) ? (
+                    <CountdownTimer expiresAt={o.expiresAt || o.reservedUntil} />
                   ) : (
                     'N/A'
                   )}
                 </td>
                 <td>
-                  {['Reserved', 'Paid'].includes(o.status) && (
+                  {['RESERVED', 'Reserved', 'PAID', 'Paid'].includes(o.status) && (
                     <button className="btn btn-disabled" style={{ background: '#dc3545', color: '#fff', padding: '4px 8px' }} onClick={() => handleCancelOrder(o._id)}>
                       Cancel Order
                     </button>
