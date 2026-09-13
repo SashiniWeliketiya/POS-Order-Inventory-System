@@ -1,269 +1,264 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import './App.css';
 
-const API_URL = "https://pos-backend-mc643n9oc-sashini.vercel.app";
+// Live Countdown Timer Component
+function CountdownTimer({ reservedUntil }) {
+  const [timeLeft, setTimeLeft] = useState('');
+  const [isExpired, setIsExpired] = useState(false);
 
-export default function App() {
+  useEffect(() => {
+    const calculateTimeLeft = () => {
+      const difference = new Date(reservedUntil) - new Date();
+      if (difference <= 0) {
+        setTimeLeft('00:00');
+        setIsExpired(true);
+        return;
+      }
+
+      const minutes = Math.floor((difference / 1000 / 60) % 60);
+      const seconds = Math.floor((difference / 1000) % 60);
+
+      const formatted = `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+      setTimeLeft(formatted);
+    };
+
+    calculateTimeLeft();
+    const timer = setInterval(calculateTimeLeft, 1000);
+    return () => clearInterval(timer);
+  }, [reservedUntil]);
+
+  return (
+    <span style={{ color: isExpired ? '#dc3545' : '#28a745', fontWeight: 'bold' }}>
+      {timeLeft} {isExpired ? '(Expired)' : ''}
+    </span>
+  );
+}
+
+function App() {
   const [products, setProducts] = useState([]);
-  const [orders, setOrders] = useState([]);
   const [cart, setCart] = useState([]);
+  const [orders, setOrders] = useState([]);
   const [activeOrder, setActiveOrder] = useState(null);
-  const [timeLeft, setTimeLeft] = useState(300); // 5 Minutes in seconds
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState('');
+  const [newProduct, setNewProduct] = useState({ name: '', price: '', stock: '' });
 
-  // New Product Form
-  const [name, setName] = useState('');
-  const [price, setPrice] = useState('');
-  const [stock, setStock] = useState('');
-
-  const fetchData = async () => {
+  const fetchProducts = async () => {
     try {
-      const [prodRes, orderRes] = await Promise.all([
-        axios.get(`${API_BASE}/products`),
-        axios.get(`${API_BASE}/orders`)
-      ]);
-      setProducts(prodRes.data);
-      setOrders(orderRes.data);
+      const res = await fetch('http://localhost:5000/api/products');
+      const data = await res.json();
+      setProducts(data);
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const fetchOrders = async () => {
+    try {
+      const res = await fetch('http://localhost:5000/api/orders');
+      const data = await res.json();
+      setOrders(data);
     } catch (err) {
       console.error(err);
     }
   };
 
   useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 3000);
+    fetchProducts();
+    fetchOrders();
+    const interval = setInterval(() => {
+      fetchProducts();
+      fetchOrders();
+    }, 2000); // 2-second polling for real-time status update
     return () => clearInterval(interval);
   }, []);
 
-  // 5-Minute Countdown Logic
-  useEffect(() => {
-    let timer;
-    if (activeOrder && timeLeft > 0) {
-      timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
-    } else if (timeLeft === 0 && activeOrder) {
-      setMessage('Reservation expired! Stock released automatically.');
-      setActiveOrder(null);
-      fetchData();
-    }
-    return () => clearInterval(timer);
-  }, [activeOrder, timeLeft]);
-
   const handleAddProduct = async (e) => {
     e.preventDefault();
-    if (!name || !price || !stock) return alert('Fill all product fields!');
-    try {
-      await axios.post(`${API_BASE}/products`, { name, price: Number(price), stock: Number(stock) });
-      setName(''); setPrice(''); setStock('');
-      setMessage('Product added successfully!');
-      fetchData();
-    } catch (err) {
-      alert(err.response?.data?.error || 'Failed to add product');
-    }
+    await fetch('http://localhost:5000/api/products', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: newProduct.name,
+        price: Number(newProduct.price),
+        stock: Number(newProduct.stock),
+      }),
+    });
+    setNewProduct({ name: '', price: '', stock: '' });
+    fetchProducts();
   };
 
   const addToCart = (product) => {
-    const existing = cart.find(item => item.productId === product._id);
-    if (existing) {
-      if (existing.quantity + 1 > product.availableStock) return alert('Stock limit reached!');
-      setCart(cart.map(item => item.productId === product._id ? { ...item, quantity: item.quantity + 1 } : item));
-    } else {
-      if (product.availableStock < 1) return alert('Out of stock!');
-      setCart([...cart, { productId: product._id, name: product.name, price: product.price, quantity: 1 }]);
-    }
+    setCart((prevCart) => {
+      const existing = prevCart.find((i) => i.productId === product._id);
+      if (existing) {
+        return prevCart.map((i) =>
+          i.productId === product._id ? { ...i, qty: i.qty + 1 } : i
+        );
+      }
+      return [...prevCart, { productId: product._id, name: product.name, price: product.price, qty: 1 }];
+    });
   };
 
-  const handleCheckout = async () => {
+  const handleCreateOrder = async () => {
     if (cart.length === 0) return;
-    setLoading(true);
-    try {
-      const res = await axios.post(`${API_BASE}/orders/reserve`, {
-        idempotencyKey: `cart-${Date.now()}`,
-        items: cart.map(i => ({ productId: i.productId, quantity: i.quantity }))
-      });
-      setActiveOrder(res.data.order);
-      setTimeLeft(300); // Reset timer to 5 mins
+    const res = await fetch('http://localhost:5000/api/orders/reserve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ items: cart }),
+    });
+
+    const data = await res.json();
+    if (res.ok) {
+      setActiveOrder(data.order);
       setCart([]);
-      setMessage('Stock Reserved! Complete payment within 5 minutes.');
-      fetchData();
-    } catch (err) {
-      alert(err.response?.data?.error || 'Reservation failed');
-    } finally {
-      setLoading(false);
+      fetchProducts();
+      fetchOrders();
+    } else {
+      alert(data.error);
     }
   };
 
-  const handlePayment = async (outcome) => {
+  const handleMockPayment = async (outcome) => {
     if (!activeOrder) return;
-    setLoading(true);
-    try {
-      const res = await axios.post(`${API_BASE}/orders/pay`, {
+    const res = await fetch('http://localhost:5000/api/orders/pay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
         orderId: activeOrder._id,
-        paymentOutcome: outcome
-      });
-      setMessage(res.data.message);
-      setActiveOrder(null);
-      fetchData();
-    } catch (err) {
-      alert(err.response?.data?.error || 'Payment process failed');
-    } finally {
-      setLoading(false);
-    }
+        outcome,
+        idempotencyKey: `PAY-${activeOrder._id}-${Date.now()}`
+      }),
+    });
+
+    const data = await res.json();
+    alert(data.message);
+    setActiveOrder(null);
+    fetchProducts();
+    fetchOrders();
   };
 
-  const formatTime = (seconds) => {
-    const m = Math.floor(seconds / 60);
-    const s = seconds % 60;
-    return `${m}:${s < 10 ? '0' : ''}${s}`;
+  const handleCancelOrder = async (orderId) => {
+    const res = await fetch('http://localhost:5000/api/orders/cancel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ orderId }),
+    });
+    const data = await res.json();
+    alert(data.message);
+    fetchProducts();
+    fetchOrders();
   };
 
   return (
-    <div style={{ padding: '30px', fontFamily: "'Segoe UI', Roboto, sans-serif", maxWidth: '1200px', margin: '0 auto', color: '#2c3e50', backgroundColor: '#f4f6f9', minHeight: '100vh' }}>
-      
-      {/* Header */}
-      <header style={{ textAlign: 'center', marginBottom: '30px', background: '#fff', padding: '20px', borderRadius: '10px', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-        <h1 style={{ margin: 0, fontSize: '28px', color: '#1e293b' }}>Smart POS & Inventory System</h1>
-        <p style={{ margin: '8px 0 0 0', color: '#64748b', fontSize: '14px' }}>Concurrency-Safe Stock Reservation • Mock Payments • Order Lifecycle Management</p>
+    <div className="container">
+      <header className="header">
+        <h1>POS Order & Inventory System</h1>
+        <p className="subtitle">Concurrency-Safe Stock Reservation & Mock Payments</p>
       </header>
 
-      {message && (
-        <div style={{ padding: '14px', background: '#e0f2fe', color: '#0369a1', borderLeft: '5px solid #0284c7', borderRadius: '6px', marginBottom: '25px', fontWeight: '500' }}>
-          {message}
-        </div>
-      )}
-
       {/* Add Product Section */}
-      <section style={{ background: '#fff', padding: '20px', borderRadius: '10px', marginBottom: '30px', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-        <h3 style={{ margin: '0 0 15px 0', fontSize: '18px' }}>Add New Product to Inventory</h3>
-        <form onSubmit={handleAddProduct} style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr auto', gap: '15px' }}>
-          <input type="text" placeholder="Product Name" value={name} onChange={e => setName(e.target.value)} style={{ padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
-          <input type="number" placeholder="Price (LKR)" value={price} onChange={e => setPrice(e.target.value)} style={{ padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
-          <input type="number" placeholder="Stock Quantity" value={stock} onChange={e => setStock(e.target.value)} style={{ padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1' }} />
-          <button type="submit" style={{ padding: '10px 20px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: '600', cursor: 'pointer' }}>+ Add Item</button>
+      <section className="card add-product-card">
+        <h3>Add New Product</h3>
+        <form onSubmit={handleAddProduct} className="form-row">
+          <input type="text" placeholder="Product Name" value={newProduct.name} onChange={(e) => setNewProduct({ ...newProduct, name: e.target.value })} required />
+          <input type="number" placeholder="Price (LKR)" value={newProduct.price} onChange={(e) => setNewProduct({ ...newProduct, price: e.target.value })} required />
+          <input type="number" placeholder="Stock" value={newProduct.stock} onChange={(e) => setNewProduct({ ...newProduct, stock: e.target.value })} required />
+          <button type="submit" className="btn btn-primary">Add Product</button>
         </form>
       </section>
 
-      {/* Main Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: '25px', marginBottom: '30px' }}>
-        
-        {/* Products List */}
-        <section>
-          <h3 style={{ margin: '0 0 15px 0' }}>Live Inventory Products</h3>
-          {products.length === 0 ? <p style={{ color: '#94a3b8' }}>No items in inventory.</p> : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '15px' }}>
-              {products.map(p => (
-                <div key={p._id} style={{ background: '#fff', padding: '18px', borderRadius: '10px', border: '1px solid #e2e8f0', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
-                  <h4 style={{ margin: '0 0 8px 0', fontSize: '16px' }}>{p.name}</h4>
-                  <div style={{ fontSize: '14px', color: '#475569', marginBottom: '12px' }}>
-                    <div>Price: <strong>LKR {p.price}</strong></div>
-                    <div>Total Base Stock: {p.totalStock}</div>
-                    <div style={{ marginTop: '4px', fontWeight: 'bold', color: p.availableStock > 0 ? '#16a34a' : '#dc2626' }}>
-                      Available Stock: {p.availableStock}
-                    </div>
-                  </div>
-                  <button 
-                    disabled={p.availableStock <= 0} 
-                    onClick={() => addToCart(p)}
-                    style={{ width: '100%', padding: '9px', background: p.availableStock > 0 ? '#059669' : '#94a3b8', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: '600', cursor: p.availableStock > 0 ? 'pointer' : 'not-allowed' }}
-                  >
-                    {p.availableStock > 0 ? 'Add to Cart' : 'Out of Stock'}
-                  </button>
+      <div className="main-content">
+        {/* Available Products */}
+        <section className="products-section">
+          <h2>Available Products</h2>
+          <div className="product-grid">
+            {products.map((p) => (
+              <div key={p._id} className="product-card">
+                <h4>{p.name}</h4>
+                <p>Price: <strong>LKR {p.price}</strong></p>
+                <p className="stock-info">Stock: <span className={p.stock > 0 ? 'text-success' : 'text-danger'}>{p.stock} Available</span></p>
+                <button className={`btn ${p.stock > 0 ? 'btn-action' : 'btn-disabled'}`} disabled={p.stock <= 0} onClick={() => addToCart(p)}>
+                  Add to Cart
+                </button>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Current Cart & Mock Payment Panel */}
+        <aside className="card cart-section">
+          <h3>Current Cart</h3>
+          {cart.length === 0 ? <p className="empty-cart">Cart is empty</p> : (
+            <div>
+              {cart.map((item) => (
+                <div key={item.productId} className="cart-item">
+                  <span>{item.name} (x{item.qty})</span>
+                  <span>LKR {item.price * item.qty}</span>
                 </div>
               ))}
+              <button className="btn btn-primary" style={{ width: '100%', marginTop: '10px' }} onClick={handleCreateOrder}>
+                Proceed to Checkout (Reserve Stock)
+              </button>
             </div>
           )}
-        </section>
 
-        {/* Cart & Active Order */}
-        <section>
-          <div style={{ background: '#fff', padding: '20px', borderRadius: '10px', border: '1px solid #e2e8f0', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-            <h3 style={{ margin: '0 0 15px 0' }}>Current Cart</h3>
-            {cart.length === 0 ? <p style={{ color: '#94a3b8' }}>Cart is empty</p> : (
-              <div>
-                {cart.map(item => (
-                  <div key={item.productId} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '10px', fontSize: '14px' }}>
-                    <span>{item.name} × {item.quantity}</span>
-                    <span style={{ fontWeight: '600' }}>LKR {item.price * item.quantity}</span>
-                  </div>
-                ))}
-                <hr style={{ border: 'none', borderTop: '1px solid #e2e8f0', margin: '15px 0' }} />
-                <button 
-                  onClick={handleCheckout} 
-                  disabled={loading}
-                  style={{ width: '100%', padding: '12px', background: '#2563eb', color: '#fff', border: 'none', borderRadius: '6px', fontSize: '15px', fontWeight: 'bold', cursor: 'pointer' }}
-                >
-                  Reserve Stock & Checkout
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Countdown & Mock Payment Modal */}
           {activeOrder && (
-            <div style={{ marginTop: '20px', background: '#fffbe8', border: '2px solid #fde047', padding: '20px', borderRadius: '10px' }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
-                <h4 style={{ margin: 0, color: '#854d0e' }}>Payment Gateway Simulator</h4>
-                <span style={{ background: '#fef08a', color: '#854d0e', padding: '4px 8px', borderRadius: '4px', fontWeight: 'bold', fontSize: '14px' }}>
-                  Timer: {formatTime(timeLeft)}
-                </span>
-              </div>
-
-              <p style={{ fontSize: '13px', margin: '5px 0' }}>Status: <strong>{activeOrder.status}</strong></p>
-              <p style={{ fontSize: '15px', margin: '5px 0 15px 0' }}>Total Amount: <strong>LKR {activeOrder.totalAmount}</strong></p>
-
-              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                <button onClick={() => handlePayment('success')} disabled={loading} style={{ padding: '10px', background: '#16a34a', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: '600', cursor: 'pointer' }}>
-                  Simulate Payment Success
-                </button>
-                <button onClick={() => handlePayment('failure')} disabled={loading} style={{ padding: '10px', background: '#dc2626', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: '600', cursor: 'pointer' }}>
-                  Simulate Payment Failure
-                </button>
-                <button onClick={() => handlePayment('timeout')} disabled={loading} style={{ padding: '10px', background: '#d97706', color: '#fff', border: 'none', borderRadius: '6px', fontWeight: '600', cursor: 'pointer' }}>
-                  Simulate Payment Timeout
-                </button>
+            <div style={{ marginTop: '20px', padding: '10px', background: '#e9ecef', borderRadius: '5px' }}>
+              <h4>Mock Payment Gateway</h4>
+              <p><small>Order ID: {activeOrder._id}</small></p>
+              <p><strong>Total: LKR {activeOrder.totalAmount}</strong></p>
+              <p style={{ marginTop: '5px' }}>
+                Time Remaining: <CountdownTimer reservedUntil={activeOrder.reservedUntil} />
+              </p>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', marginTop: '10px' }}>
+                <button className="btn btn-success" onClick={() => handleMockPayment('success')}>Simulate Payment Success</button>
+                <button className="btn btn-disabled" style={{ background: '#dc3545', color: '#fff' }} onClick={() => handleMockPayment('failure')}>Simulate Payment Failure</button>
+                <button className="btn btn-disabled" style={{ background: '#ffc107', color: '#000' }} onClick={() => handleMockPayment('timeout')}>Simulate Payment Timeout</button>
               </div>
             </div>
           )}
-        </section>
-
+        </aside>
       </div>
 
-      {/* Order Audit History Table */}
-      <section style={{ background: '#fff', padding: '20px', borderRadius: '10px', boxShadow: '0 2px 8px rgba(0,0,0,0.05)' }}>
-        <h3 style={{ margin: '0 0 15px 0' }}>Order Audit History & Lifecycle Log</h3>
-        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '14px', textAlign: 'left' }}>
+      {/* Order Lifecycle Table with Live Countdown */}
+      <section className="card" style={{ marginTop: '30px' }}>
+        <h3>Order Lifecycle Management</h3>
+        <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
           <thead>
-            <tr style={{ background: '#f8fafc', borderBottom: '2px solid #e2e8f0' }}>
-              <th style={{ padding: '10px' }}>Order ID</th>
-              <th style={{ padding: '10px' }}>Total Amount</th>
-              <th style={{ padding: '10px' }}>Status</th>
-              <th style={{ padding: '10px' }}>Created Time</th>
+            <tr style={{ background: '#f1f1f1', textAlign: 'left' }}>
+              <th>Order ID</th>
+              <th>Total</th>
+              <th>Status</th>
+              <th>Time Remaining</th>
+              <th>Action</th>
             </tr>
           </thead>
           <tbody>
-            {orders.map(o => (
-              <tr key={o._id} style={{ borderBottom: '1px solid #f1f5f9' }}>
-                <td style={{ padding: '10px', fontFamily: 'monospace', fontSize: '12px' }}>{o._id}</td>
-                <td style={{ padding: '10px' }}>LKR {o.totalAmount}</td>
-                <td style={{ padding: '10px' }}>
-                  <span style={{ 
-                    padding: '4px 8px', 
-                    borderRadius: '4px', 
-                    fontSize: '12px', 
-                    fontWeight: 'bold',
-                    background: o.status === 'PAID' ? '#dcfce7' : o.status === 'RESERVED' ? '#fef9c3' : '#fee2e2',
-                    color: o.status === 'PAID' ? '#15803d' : o.status === 'RESERVED' ? '#a16207' : '#b91c1c'
-                  }}>
-                    {o.status}
-                  </span>
+            {orders.map((o) => (
+              <tr key={o._id} style={{ borderBottom: '1px solid #ddd' }}>
+                <td>{o._id}</td>
+                <td>LKR {o.totalAmount}</td>
+                <td><strong>{o.status}</strong></td>
+                <td>
+                  {o.status === 'Reserved' ? (
+                    <CountdownTimer reservedUntil={o.reservedUntil} />
+                  ) : (
+                    'N/A'
+                  )}
                 </td>
-                <td style={{ padding: '10px', color: '#64748b' }}>{new Date(o.createdAt).toLocaleTimeString()}</td>
+                <td>
+                  {['Reserved', 'Paid'].includes(o.status) && (
+                    <button className="btn btn-disabled" style={{ background: '#dc3545', color: '#fff', padding: '4px 8px' }} onClick={() => handleCancelOrder(o._id)}>
+                      Cancel Order
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </section>
-
     </div>
   );
 }
+
+export default App;
