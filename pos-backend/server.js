@@ -6,6 +6,10 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
+app.get('/', (req, res) => {
+  res.send('POS Backend API is Running Successfully!');
+});
+
 // MongoDB Connection
 mongoose.connect(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017/pos-system?retryWrites=false')
   .then(() => console.log('MongoDB Connected Successfully'))
